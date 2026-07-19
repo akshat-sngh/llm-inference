@@ -24,6 +24,9 @@ def write_config(
     fail_warmup: bool = False,
     warmup_timeout: float = 3,
     warmup_sleep_seconds: float = 0.02,
+    telemetry: dict[str, object] | None = None,
+    server_health_status: int = 200,
+    readiness_timeout: float = 3,
 ) -> Path:
     fixture_directory = Path(__file__).parent / "fixtures"
     port = free_port()
@@ -39,11 +42,18 @@ def write_config(
         "paths": {"results_root": "./results", "working_directory": "."},
         "server": {
             "command": [sys.executable, str(fixture_directory / "fake_server.py")],
-            "arguments": ["--host", "127.0.0.1", "--port", str(port)],
+            "arguments": [
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--health-status",
+                str(server_health_status),
+            ],
             "host": "127.0.0.1",
             "port": port,
             "readiness_path": "/health",
-            "readiness_timeout_seconds": 3,
+            "readiness_timeout_seconds": readiness_timeout,
             "readiness_poll_interval_seconds": 0.03,
             "shutdown_timeout_seconds": 2,
         },
@@ -60,6 +70,8 @@ def write_config(
             "arguments": warmup_arguments,
             "timeout_seconds": warmup_timeout,
         }
+    if telemetry is not None:
+        document["telemetry"] = {"nvidia": telemetry}
     path = tmp_path / "experiment.yaml"
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
     return path

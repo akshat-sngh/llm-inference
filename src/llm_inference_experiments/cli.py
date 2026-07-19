@@ -36,11 +36,11 @@ def plan(config: Path = typer.Argument(..., exists=True, readable=True)) -> None
     loaded = _load_or_exit(config)
     execution_plan = build_plan(loaded)
     try:
-        validate_preflight(loaded, execution_plan)
+        preflight = validate_preflight(loaded, execution_plan)
     except ExperimentError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(format_plan(loaded, execution_plan))
+    typer.echo(format_plan(loaded, execution_plan, preflight))
 
 
 @app.command()
@@ -53,11 +53,11 @@ def run(
     execution_plan = build_plan(loaded)
     if dry_run:
         try:
-            validate_preflight(loaded, execution_plan)
+            preflight = validate_preflight(loaded, execution_plan)
         except ExperimentError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=1) from exc
-        typer.echo(format_plan(loaded, execution_plan))
+        typer.echo(format_plan(loaded, execution_plan, preflight))
         typer.echo("Dry run: nothing was executed and no run directory was created.")
         return
     try:

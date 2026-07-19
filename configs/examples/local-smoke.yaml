@@ -33,3 +33,7 @@ benchmark:
   arguments: [--label, smoke-test]
   environment: {}
   timeout_seconds: 30
+
+telemetry:
+  nvidia:
+    enabled: false

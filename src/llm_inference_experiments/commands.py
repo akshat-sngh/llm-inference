@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .config import LoadedConfig
+from .preflight import PreflightReport
 
 
 @dataclass(frozen=True)
@@ -74,22 +75,41 @@ def build_plan(loaded: LoadedConfig) -> ExecutionPlan:
     )
 
 
-def format_plan(loaded: LoadedConfig, plan: ExecutionPlan) -> str:
+def format_plan(
+    loaded: LoadedConfig,
+    plan: ExecutionPlan,
+    preflight: PreflightReport | None = None,
+) -> str:
     warmup = "disabled" if plan.warmup is None else " ".join(plan.warmup.args)
-    return "\n".join(
-        [
-            f"Experiment: {loaded.config.experiment.name}",
-            f"Working directory: {loaded.working_directory}",
-            f"Results root: {loaded.results_root}",
-            f"Server command: {' '.join(plan.server.args)}",
-            f"Readiness URL: {plan.readiness_url}",
-            f"Warm-up: {warmup}",
-            f"Benchmark command: {' '.join(plan.benchmark.args)}",
-            f"Trials: {plan.repeats}",
-            "Timeouts: "
-            f"readiness={plan.readiness_timeout_seconds}s, "
-            f"poll={plan.readiness_poll_interval_seconds}s, "
-            f"shutdown={plan.shutdown_timeout_seconds}s, "
-            f"benchmark={plan.benchmark.timeout_seconds}s",
-        ]
-    )
+    nvidia = loaded.config.telemetry.nvidia
+    lines = [
+        f"Experiment: {loaded.config.experiment.name}",
+        f"Working directory: {loaded.working_directory}",
+        f"Results root: {loaded.results_root}",
+        f"Server command: {' '.join(plan.server.args)}",
+        f"Readiness URL: {plan.readiness_url}",
+        f"Warm-up: {warmup}",
+        f"Benchmark command: {' '.join(plan.benchmark.args)}",
+        f"Trials: {plan.repeats}",
+        "Timeouts: "
+        f"readiness={plan.readiness_timeout_seconds}s, "
+        f"poll={plan.readiness_poll_interval_seconds}s, "
+        f"shutdown={plan.shutdown_timeout_seconds}s, "
+        f"benchmark={plan.benchmark.timeout_seconds}s",
+    ]
+    if not nvidia.enabled:
+        lines.append("NVIDIA telemetry: disabled")
+    else:
+        executable = preflight.nvidia_executable if preflight is not None else None
+        lines.extend(
+            [
+                "NVIDIA telemetry: enabled",
+                f"NVIDIA telemetry required: {str(nvidia.required).lower()}",
+                f"NVIDIA device index: {nvidia.device_index}",
+                f"NVIDIA sample interval: {nvidia.sample_interval_seconds}s",
+                f"NVIDIA executable: {executable or nvidia.executable}",
+            ]
+        )
+    if preflight is not None:
+        lines.extend(f"Preflight warning: {warning}" for warning in preflight.warnings)
+    return "\n".join(lines)

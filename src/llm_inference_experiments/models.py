@@ -72,6 +72,23 @@ class BenchmarkSettings(BaseModel):
     timeout_seconds: PositiveFloat
 
 
+class NvidiaTelemetrySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    required: bool = False
+    executable: str = Field(default="nvidia-smi", min_length=1)
+    device_index: int = Field(default=0, ge=0)
+    sample_interval_seconds: PositiveFloat = 1.0
+    command_timeout_seconds: PositiveFloat = 5.0
+
+
+class TelemetrySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nvidia: NvidiaTelemetrySettings = Field(default_factory=NvidiaTelemetrySettings)
+
+
 class ExperimentConfig(BaseModel):
     """The validated, un-resolved versioned YAML document."""
 
@@ -83,6 +100,7 @@ class ExperimentConfig(BaseModel):
     server: ServerSettings
     warmup: WarmupSettings = Field(default_factory=WarmupSettings)
     benchmark: BenchmarkSettings
+    telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
 
     @model_validator(mode="after")
     def supported_schema_version(self) -> ExperimentConfig:

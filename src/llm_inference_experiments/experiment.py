@@ -10,9 +10,11 @@ from .config import LoadedConfig
 from .errors import ExperimentExecutionError, ProcessTimeoutError
 from .manifest import Manifest, RunStatus, atomic_write_json, atomic_write_text, utc_now
 from .metadata import git_metadata, python_metadata, system_metadata
+from .nvidia import collect_metadata, metadata_command, sample_command, unavailable_metadata
 from .paths import create_run_directory
-from .preflight import validate_preflight
+from .preflight import PreflightReport, validate_preflight
 from .process import ManagedProcess, ProcessRunner, wait_for_readiness
+from .telemetry import NvidiaSampler, unavailable_status
 
 
 class ExperimentRunner:
@@ -21,15 +23,17 @@ class ExperimentRunner:
 
     def run(self, loaded: LoadedConfig) -> Path:
         plan = build_plan(loaded)
-        validate_preflight(loaded, plan)
+        preflight = validate_preflight(loaded, plan)
         run_id, run_directory = create_run_directory(
             loaded.results_root, loaded.config.experiment.name
         )
-        manifest = self._prepare_run(loaded, plan, run_id, run_directory)
+        manifest = self._prepare_run(loaded, plan, preflight, run_id, run_directory)
         server: ManagedProcess | None = None
+        sampler: NvidiaSampler | None = None
         error: BaseException | None = None
         failed_phase = RunStatus.CREATED
         try:
+            sampler = self._prepare_nvidia_telemetry(loaded, preflight, run_directory, manifest)
             manifest.set_phase(RunStatus.STARTING_SERVER)
             server = self.process_runner.start(
                 plan.server,
@@ -118,6 +122,17 @@ class ExperimentRunner:
                 manifest.set_phase(RunStatus.STOPPING_SERVER)
                 server_result = server.stop(plan.shutdown_timeout_seconds)
                 manifest.update(server_process={"pid": server.pid, **server_result.as_dict()})
+            if sampler is not None:
+                sampler.stop()
+                sampler_status = sampler.status()
+                manifest.update(
+                    telemetry={
+                        **manifest.data["telemetry"],
+                        "successful_samples": sampler_status["successful_samples"],
+                        "failed_samples": sampler_status["failed_samples"],
+                        "available": True,
+                    }
+                )
 
         if error is not None:
             manifest.update(
@@ -137,6 +152,7 @@ class ExperimentRunner:
         self,
         loaded: LoadedConfig,
         plan: ExecutionPlan,
+        preflight: PreflightReport,
         run_id: str,
         run_directory: Path,
     ) -> Manifest:
@@ -175,6 +191,113 @@ class ExperimentRunner:
                 "failed_trials": 0,
                 "server_process": None,
                 "warmup_process": None,
+                "telemetry": {
+                    "enabled": loaded.config.telemetry.nvidia.enabled,
+                    "required": loaded.config.telemetry.nvidia.required,
+                    "available": False,
+                    "warnings": list(preflight.warnings),
+                    "nvidia_metadata_path": None,
+                    "nvidia_samples_path": None,
+                    "nvidia_status_path": None,
+                    "successful_samples": 0,
+                    "failed_samples": 0,
+                },
                 "error": None,
             },
         )
+
+    def _prepare_nvidia_telemetry(
+        self,
+        loaded: LoadedConfig,
+        preflight: PreflightReport,
+        run_directory: Path,
+        manifest: Manifest,
+    ) -> NvidiaSampler | None:
+        settings = loaded.config.telemetry.nvidia
+        if not settings.enabled:
+            return None
+
+        metadata_path = run_directory / "metadata/nvidia.json"
+        status_path = run_directory / "telemetry/status.json"
+        samples_path = run_directory / "telemetry/nvidia.jsonl"
+        telemetry_paths = {
+            "nvidia_metadata_path": "metadata/nvidia.json",
+            "nvidia_samples_path": None,
+            "nvidia_status_path": "telemetry/status.json",
+        }
+        metadata_files = [*manifest.data["metadata_files"], "metadata/nvidia.json"]
+        executable = preflight.nvidia_executable
+        if executable is None:
+            message = f"NVIDIA executable cannot be located: {settings.executable}"
+            metadata = unavailable_metadata(settings, message)
+            atomic_write_json(metadata_path, metadata)
+            atomic_write_json(
+                status_path, unavailable_status(settings, "unavailable", metadata["error"])
+            )
+            manifest.update(
+                telemetry={
+                    **manifest.data["telemetry"],
+                    **telemetry_paths,
+                    "available": False,
+                },
+                metadata_files=metadata_files,
+            )
+            return None
+
+        atomic_write_json(
+            run_directory / "commands/nvidia-metadata.json",
+            {
+                "name": "nvidia-metadata",
+                "command": metadata_command(executable, settings.device_index),
+                "timeout_seconds": settings.command_timeout_seconds,
+            },
+        )
+        atomic_write_json(
+            run_directory / "commands/nvidia-sample.json",
+            {
+                "name": "nvidia-sample",
+                "command": sample_command(executable, settings.device_index),
+                "timeout_seconds": settings.command_timeout_seconds,
+            },
+        )
+        command_files = [
+            *manifest.data["command_files"],
+            "commands/nvidia-metadata.json",
+            "commands/nvidia-sample.json",
+        ]
+        metadata = collect_metadata(settings, executable)
+        atomic_write_json(metadata_path, metadata)
+        if not metadata["available"]:
+            error = metadata["error"]
+            atomic_write_json(status_path, unavailable_status(settings, "unavailable", error))
+            manifest.update(
+                telemetry={
+                    **manifest.data["telemetry"],
+                    **telemetry_paths,
+                    "available": False,
+                    "warnings": [
+                        *manifest.data["telemetry"]["warnings"],
+                        metadata["error"]["message"] if metadata["error"] is not None else "",
+                    ],
+                },
+                metadata_files=metadata_files,
+                command_files=command_files,
+            )
+            if settings.required:
+                message = error["message"] if error is not None else "unknown NVIDIA probe failure"
+                raise ExperimentExecutionError(f"NVIDIA metadata probe failed: {message}")
+            return None
+
+        sampler = NvidiaSampler(settings, executable, samples_path, status_path)
+        sampler.start()
+        manifest.update(
+            telemetry={
+                **manifest.data["telemetry"],
+                **telemetry_paths,
+                "nvidia_samples_path": "telemetry/nvidia.jsonl",
+                "available": True,
+            },
+            metadata_files=metadata_files,
+            command_files=command_files,
+        )
+        return sampler
