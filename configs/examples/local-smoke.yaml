@@ -1,0 +1,35 @@
+schema_version: 1
+
+experiment:
+  name: local-smoke
+  description: Local orchestration smoke test
+  seed: 1234
+  repeats: 2
+
+paths:
+  results_root: ./results
+  working_directory: ../..
+
+server:
+  command: [python3, tests/fixtures/fake_server.py]
+  arguments: [--host, 127.0.0.1, --port, "8765"]
+  environment: {}
+  host: 127.0.0.1
+  port: 8765
+  readiness_path: /health
+  readiness_timeout_seconds: 15
+  readiness_poll_interval_seconds: 0.2
+  shutdown_timeout_seconds: 5
+
+warmup:
+  enabled: false
+  command: []
+  arguments: []
+  environment: {}
+  timeout_seconds: 30
+
+benchmark:
+  command: [python3, tests/fixtures/fake_benchmark.py]
+  arguments: [--label, smoke-test]
+  environment: {}
+  timeout_seconds: 30
