@@ -6,3 +6,20 @@ __pycache__/
 dist/
 results/
 
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Downloaded model weights and local model caches
+models/
+model_cache/
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.onnx
