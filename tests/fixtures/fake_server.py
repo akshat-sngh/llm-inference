@@ -13,7 +13,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/health":
             body = json.dumps({"status": "ok"}).encode()
-            self.send_response(200)
+            self.send_response(self.server.health_status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -29,9 +29,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", required=True)
     parser.add_argument("--port", required=True, type=int)
+    parser.add_argument("--health-status", type=int, default=200)
     args = parser.parse_args()
     stopped = Event()
     server = HTTPServer((args.host, args.port), Handler)
+    server.health_status = args.health_status
     server.timeout = 0.1
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     signal.signal(signal.SIGINT, lambda *_: stopped.set())

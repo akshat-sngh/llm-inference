@@ -7,10 +7,11 @@ from typing import Any
 
 from .commands import ExecutionPlan, build_plan
 from .config import LoadedConfig
-from .errors import ExperimentExecutionError
+from .errors import ExperimentExecutionError, ProcessTimeoutError
 from .manifest import Manifest, RunStatus, atomic_write_json, atomic_write_text, utc_now
 from .metadata import git_metadata, python_metadata, system_metadata
 from .paths import create_run_directory
+from .preflight import validate_preflight
 from .process import ManagedProcess, ProcessRunner, wait_for_readiness
 
 
@@ -20,6 +21,7 @@ class ExperimentRunner:
 
     def run(self, loaded: LoadedConfig) -> Path:
         plan = build_plan(loaded)
+        validate_preflight(loaded, plan)
         run_id, run_directory = create_run_directory(
             loaded.results_root, loaded.config.experiment.name
         )
@@ -46,11 +48,15 @@ class ExperimentRunner:
 
             if plan.warmup is not None:
                 manifest.set_phase(RunStatus.WARMING_UP)
-                warmup = self.process_runner.run(
-                    plan.warmup,
-                    run_directory / "logs/warmup.stdout.log",
-                    run_directory / "logs/warmup.stderr.log",
-                )
+                try:
+                    warmup = self.process_runner.run(
+                        plan.warmup,
+                        run_directory / "logs/warmup.stdout.log",
+                        run_directory / "logs/warmup.stderr.log",
+                    )
+                except ProcessTimeoutError as exc:
+                    manifest.update(warmup_process=exc.result.as_dict())
+                    raise
                 manifest.update(warmup_process=warmup.as_dict())
                 if warmup.return_code != 0:
                     raise ExperimentExecutionError(
@@ -64,11 +70,21 @@ class ExperimentRunner:
                 trial_directory.mkdir(parents=True)
                 manifest.data["trial_directories"].append(str(trial_directory))
                 manifest.write()
-                result = self.process_runner.run(
-                    plan.benchmark,
-                    trial_directory / "benchmark.stdout.log",
-                    trial_directory / "benchmark.stderr.log",
-                )
+                try:
+                    result = self.process_runner.run(
+                        plan.benchmark,
+                        trial_directory / "benchmark.stdout.log",
+                        trial_directory / "benchmark.stderr.log",
+                    )
+                except ProcessTimeoutError as exc:
+                    status = {
+                        "trial": trial_index,
+                        "status": "failed",
+                        **exc.result.as_dict(),
+                    }
+                    atomic_write_json(trial_directory / "status.json", status)
+                    manifest.update(failed_trials=manifest.data["failed_trials"] + 1)
+                    raise
                 status: dict[str, Any] = {
                     "trial": trial_index,
                     "status": "completed",

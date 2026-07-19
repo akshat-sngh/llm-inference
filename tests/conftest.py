@@ -13,12 +13,26 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def write_config(tmp_path: Path, *, repeats: int = 2, fail_benchmark: bool = False) -> Path:
+def write_config(
+    tmp_path: Path,
+    *,
+    repeats: int = 2,
+    fail_benchmark: bool = False,
+    benchmark_timeout: float = 3,
+    benchmark_sleep_seconds: float = 0.02,
+    enable_warmup: bool = False,
+    fail_warmup: bool = False,
+    warmup_timeout: float = 3,
+    warmup_sleep_seconds: float = 0.02,
+) -> Path:
     fixture_directory = Path(__file__).parent / "fixtures"
     port = free_port()
-    benchmark_arguments = ["--label", "test"]
+    benchmark_arguments = ["--label", "test", "--sleep-seconds", str(benchmark_sleep_seconds)]
     if fail_benchmark:
         benchmark_arguments.append("--fail")
+    warmup_arguments = ["--label", "warmup", "--sleep-seconds", str(warmup_sleep_seconds)]
+    if fail_warmup:
+        warmup_arguments.append("--fail")
     document = {
         "schema_version": 1,
         "experiment": {"name": "test-run", "repeats": repeats},
@@ -36,9 +50,16 @@ def write_config(tmp_path: Path, *, repeats: int = 2, fail_benchmark: bool = Fal
         "benchmark": {
             "command": [sys.executable, str(fixture_directory / "fake_benchmark.py")],
             "arguments": benchmark_arguments,
-            "timeout_seconds": 3,
+            "timeout_seconds": benchmark_timeout,
         },
     }
+    if enable_warmup:
+        document["warmup"] = {
+            "enabled": True,
+            "command": [sys.executable, str(fixture_directory / "fake_benchmark.py")],
+            "arguments": warmup_arguments,
+            "timeout_seconds": warmup_timeout,
+        }
     path = tmp_path / "experiment.yaml"
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
     return path

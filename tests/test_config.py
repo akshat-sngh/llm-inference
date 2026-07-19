@@ -42,3 +42,9 @@ def test_paths_are_resolved_from_configuration_directory(tmp_path: Path) -> None
     loaded = load_config(destination)
     assert loaded.working_directory == config_directory
     assert loaded.results_root == config_directory / "results"
+
+
+def test_example_results_root_is_at_repository_level() -> None:
+    repository_root = Path(__file__).resolve().parents[1]
+    loaded = load_config(repository_root / "configs/examples/local-smoke.yaml")
+    assert loaded.results_root == repository_root / "results"

@@ -7,7 +7,7 @@ experiment:
   repeats: 2
 
 paths:
-  results_root: ./results
+  results_root: ../../results
   working_directory: ../..
 
 server:

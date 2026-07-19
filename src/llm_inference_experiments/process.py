@@ -92,13 +92,13 @@ class ManagedProcess:
         )
         return self._result
 
-    def stop(self, timeout_seconds: float) -> ProcessResult:
+    def stop(self, timeout_seconds: float, *, timed_out: bool = False) -> ProcessResult:
         if self.poll() is not None:
-            return self.result()
+            return self.result(timed_out=timed_out)
         _terminate_process_group(self.process)
         try:
             self.process.wait(timeout=timeout_seconds)
-            return self.result()
+            return self.result(timed_out=timed_out)
         except subprocess.TimeoutExpired:
             _kill_process_group(self.process)
             self.process.wait()
@@ -145,10 +145,11 @@ class ProcessRunner:
         try:
             process.process.wait(timeout=spec.timeout_seconds)
         except subprocess.TimeoutExpired as exc:
-            result = process.stop(timeout_seconds=1)
+            result = process.stop(timeout_seconds=1, timed_out=True)
             raise ProcessTimeoutError(
                 f"{spec.name} exceeded its {spec.timeout_seconds}s timeout; logs: "
-                f"{result.stdout_path}, {result.stderr_path}"
+                f"{result.stdout_path}, {result.stderr_path}",
+                result,
             ) from exc
         return process.result()
 

@@ -10,6 +10,7 @@ from .commands import build_plan, format_plan
 from .config import load_config
 from .errors import ExperimentError
 from .experiment import ExperimentRunner
+from .preflight import validate_preflight
 
 app = typer.Typer(help="Run reproducible local LLM inference experiments.", no_args_is_help=True)
 
@@ -33,7 +34,13 @@ def validate(config: Path = typer.Argument(..., exists=True, readable=True)) -> 
 def plan(config: Path = typer.Argument(..., exists=True, readable=True)) -> None:
     """Print the resolved execution plan without changing anything."""
     loaded = _load_or_exit(config)
-    typer.echo(format_plan(loaded, build_plan(loaded)))
+    execution_plan = build_plan(loaded)
+    try:
+        validate_preflight(loaded, execution_plan)
+    except ExperimentError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(format_plan(loaded, execution_plan))
 
 
 @app.command()
@@ -45,6 +52,11 @@ def run(
     loaded = _load_or_exit(config)
     execution_plan = build_plan(loaded)
     if dry_run:
+        try:
+            validate_preflight(loaded, execution_plan)
+        except ExperimentError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
         typer.echo(format_plan(loaded, execution_plan))
         typer.echo("Dry run: nothing was executed and no run directory was created.")
         return
