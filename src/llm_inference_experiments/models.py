@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -89,6 +91,69 @@ class TelemetrySettings(BaseModel):
     nvidia: NvidiaTelemetrySettings = Field(default_factory=NvidiaTelemetrySettings)
 
 
+class VllmModelSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = ""
+    revision: str = ""
+    served_name: str = ""
+
+
+class VllmBenchmarkResultSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    required: bool = True
+    filename: str = "vllm-result.json"
+
+    @model_validator(mode="after")
+    def filename_is_plain(self) -> VllmBenchmarkResultSettings:
+        path = Path(self.filename)
+        if (
+            not self.filename
+            or path.is_absolute()
+            or path.name != self.filename
+            or ".." in path.parts
+        ):
+            raise ValueError("filename must be a plain filename without path traversal")
+        return self
+
+
+class VllmSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    repository_path: str = ""
+    executable: str = ""
+    python_executable: str = ""
+    expected_commit: str = ""
+    require_clean_worktree: bool = True
+    capture_dirty_diff: bool = True
+    collect_environment_report: bool = True
+    model: VllmModelSettings = Field(default_factory=VllmModelSettings)
+    benchmark_result: VllmBenchmarkResultSettings = Field(
+        default_factory=VllmBenchmarkResultSettings
+    )
+
+    @model_validator(mode="after")
+    def enabled_settings_are_complete(self) -> VllmSettings:
+        if not self.enabled:
+            return self
+        required_fields = {
+            "repository_path": self.repository_path,
+            "executable": self.executable,
+            "python_executable": self.python_executable,
+            "model.id": self.model.id,
+            "model.revision": self.model.revision,
+            "model.served_name": self.model.served_name,
+        }
+        missing = [name for name, value in required_fields.items() if not value]
+        if missing:
+            raise ValueError(f"vLLM enabled configuration requires: {', '.join(missing)}")
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", self.expected_commit):
+            raise ValueError("expected_commit must be exactly 40 hexadecimal characters")
+        return self
+
+
 class ExperimentConfig(BaseModel):
     """The validated, un-resolved versioned YAML document."""
 
@@ -101,6 +166,7 @@ class ExperimentConfig(BaseModel):
     warmup: WarmupSettings = Field(default_factory=WarmupSettings)
     benchmark: BenchmarkSettings
     telemetry: TelemetrySettings = Field(default_factory=TelemetrySettings)
+    vllm: VllmSettings = Field(default_factory=VllmSettings)
 
     @model_validator(mode="after")
     def supported_schema_version(self) -> ExperimentConfig:

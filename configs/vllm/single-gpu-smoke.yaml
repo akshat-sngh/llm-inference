@@ -1,0 +1,140 @@
+schema_version: 1
+
+experiment:
+  name: single-gpu-vllm-smoke
+  description: Pinned single-GPU vLLM smoke benchmark
+  seed: 1234
+  repeats: 2
+
+paths:
+  results_root: ../../results
+  working_directory: .
+
+server:
+  command: [../../../vllm-env/bin/vllm, serve, Qwen/Qwen2.5-7B-Instruct]
+  arguments:
+    - --revision
+    - 929d90a7473be218ae132181708d94dbf08a0420
+    - --served-model-name
+    - qwen2.5-7b-instruct
+    - --host
+    - 127.0.0.1
+    - --port
+    - "8000"
+    - --dtype
+    - bfloat16
+    - --max-model-len
+    - "4096"
+    - --gpu-memory-utilization
+    - "0.90"
+    - --tensor-parallel-size
+    - "1"
+  environment:
+    CUDA_VISIBLE_DEVICES: "0"
+    HF_HOME: /workspace/hf-cache
+  host: 127.0.0.1
+  port: 8000
+  readiness_path: /health
+  readiness_timeout_seconds: 900
+  readiness_poll_interval_seconds: 1
+  shutdown_timeout_seconds: 20
+
+warmup:
+  enabled: true
+  command: [../../../vllm-env/bin/vllm, bench, serve]
+  arguments:
+    - --backend
+    - vllm
+    - --host
+    - 127.0.0.1
+    - --port
+    - "8000"
+    - --model
+    - Qwen/Qwen2.5-7B-Instruct
+    - --served-model-name
+    - qwen2.5-7b-instruct
+    - --dataset-name
+    - random
+    - --input-len
+    - "128"
+    - --output-len
+    - "32"
+    - --random-range-ratio
+    - "0"
+    - --num-prompts
+    - "8"
+    - --max-concurrency
+    - "2"
+    - --request-rate
+    - inf
+    - --seed
+    - "1234"
+    - --ignore-eos
+    - --disable-tqdm
+  environment: {}
+  timeout_seconds: 300
+
+benchmark:
+  command: [../../../vllm-env/bin/vllm, bench, serve]
+  arguments:
+    - --backend
+    - vllm
+    - --host
+    - 127.0.0.1
+    - --port
+    - "8000"
+    - --model
+    - Qwen/Qwen2.5-7B-Instruct
+    - --served-model-name
+    - qwen2.5-7b-instruct
+    - --dataset-name
+    - random
+    - --input-len
+    - "512"
+    - --output-len
+    - "128"
+    - --random-range-ratio
+    - "0"
+    - --num-prompts
+    - "64"
+    - --max-concurrency
+    - "4"
+    - --request-rate
+    - inf
+    - --seed
+    - "1234"
+    - --ignore-eos
+    - --disable-tqdm
+    - --save-result
+    - --result-dir
+    - "{trial_dir}"
+    - --result-filename
+    - vllm-result.json
+  environment: {}
+  timeout_seconds: 600
+
+telemetry:
+  nvidia:
+    enabled: true
+    required: true
+    executable: nvidia-smi
+    device_index: 0
+    sample_interval_seconds: 1.0
+    command_timeout_seconds: 5.0
+
+vllm:
+  enabled: true
+  repository_path: ../../../vllm
+  executable: ../../../vllm-env/bin/vllm
+  python_executable: ../../../vllm-env/bin/python
+  expected_commit: 752a3a504485790a2e8491cacbb35c137339ad34
+  require_clean_worktree: true
+  capture_dirty_diff: true
+  collect_environment_report: true
+  model:
+    id: Qwen/Qwen2.5-7B-Instruct
+    revision: 929d90a7473be218ae132181708d94dbf08a0420
+    served_name: qwen2.5-7b-instruct
+  benchmark_result:
+    required: true
+    filename: vllm-result.json

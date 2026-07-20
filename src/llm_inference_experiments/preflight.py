@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 
 from .config import LoadedConfig
 from .errors import PreflightError
+from .placeholders import substitute
+from .vllm import resolve_vllm_path
 
 if TYPE_CHECKING:
     from .commands import ExecutionPlan
@@ -19,6 +21,9 @@ if TYPE_CHECKING:
 class PreflightReport:
     warnings: tuple[str, ...] = ()
     nvidia_executable: Path | None = None
+    vllm_executable: Path | None = None
+    vllm_python_executable: Path | None = None
+    vllm_repository_path: Path | None = None
 
 
 def validate_preflight(loaded: LoadedConfig, plan: ExecutionPlan) -> PreflightReport:
@@ -60,10 +65,116 @@ def validate_preflight(loaded: LoadedConfig, plan: ExecutionPlan) -> PreflightRe
                 errors.append(message)
             else:
                 warnings.append(message)
+    vllm_executable: Path | None = None
+    vllm_python_executable: Path | None = None
+    vllm_repository_path: Path | None = None
+    vllm = loaded.config.vllm
+    if vllm.enabled:
+        vllm_repository_path = resolve_vllm_path(loaded.config_path, vllm.repository_path)
+        if not vllm_repository_path.is_dir() or not (vllm_repository_path / ".git").exists():
+            errors.append(f"vLLM repository is not a Git worktree: {vllm_repository_path}")
+        vllm_executable = resolve_executable(vllm.executable, loaded.config_path.parent)
+        vllm_python_executable = resolve_executable(
+            vllm.python_executable, loaded.config_path.parent
+        )
+        if vllm_executable is None:
+            errors.append(f"vLLM executable cannot be located: {vllm.executable}")
+        if vllm_python_executable is None:
+            errors.append(f"vLLM Python executable cannot be located: {vllm.python_executable}")
+        _check_vllm_commands(loaded, plan, vllm.benchmark_result.filename, errors)
+        _check_vllm_single_gpu(loaded, plan, errors)
+    _check_placeholders(loaded, plan, errors)
     if errors:
         details = "\n".join(f"  - {error}" for error in errors)
         raise PreflightError(f"Preflight validation failed:\n{details}")
-    return PreflightReport(warnings=tuple(warnings), nvidia_executable=nvidia_executable)
+    return PreflightReport(
+        warnings=tuple(warnings),
+        nvidia_executable=nvidia_executable,
+        vllm_executable=vllm_executable,
+        vllm_python_executable=vllm_python_executable,
+        vllm_repository_path=vllm_repository_path,
+    )
+
+
+def _check_vllm_commands(
+    loaded: LoadedConfig, plan: ExecutionPlan, result_filename: str, errors: list[str]
+) -> None:
+    if "serve" not in plan.server.args:
+        errors.append("vLLM server command must invoke 'vllm serve'")
+    try:
+        bench_index = plan.benchmark.args.index("bench")
+        if plan.benchmark.args[bench_index + 1] != "serve":
+            raise ValueError
+    except (ValueError, IndexError):
+        errors.append("vLLM benchmark command must invoke 'vllm bench serve'")
+    if "--save-result" not in plan.benchmark.args:
+        errors.append("vLLM benchmark command must include --save-result")
+    result_dir = _argument_value(plan.benchmark.args, "--result-dir")
+    filename = _argument_value(plan.benchmark.args, "--result-filename")
+    if result_dir is None or "{trial_dir}" not in result_dir:
+        errors.append("vLLM benchmark --result-dir must use {trial_dir}")
+    if filename != result_filename:
+        errors.append(f"vLLM benchmark --result-filename must be {result_filename}")
+    if not _is_loopback(loaded.config.server.host):
+        errors.append("vLLM server host must be loopback-only")
+
+
+def _check_vllm_single_gpu(loaded: LoadedConfig, plan: ExecutionPlan, errors: list[str]) -> None:
+    cuda_devices = plan.server.environment.get("CUDA_VISIBLE_DEVICES")
+    if (
+        cuda_devices is not None
+        and len([item for item in cuda_devices.split(",") if item.strip()]) != 1
+    ):
+        errors.append("CUDA_VISIBLE_DEVICES must identify exactly one device")
+    for arguments in (plan.server.args, plan.benchmark.args):
+        for flag in ("--tensor-parallel-size", "--pipeline-parallel-size", "--data-parallel-size"):
+            value = _argument_value(arguments, flag)
+            if value is not None:
+                try:
+                    if int(value) > 1:
+                        errors.append(f"{flag} must not exceed one")
+                except ValueError:
+                    errors.append(f"{flag} must be an integer")
+
+
+def _check_placeholders(loaded: LoadedConfig, plan: ExecutionPlan, errors: list[str]) -> None:
+    context = {
+        "run_id": "run",
+        "run_dir": "/run",
+        "trial_dir": "/trial",
+        "trial_index": "0",
+        "experiment_name": loaded.config.experiment.name,
+        "working_directory": str(loaded.working_directory),
+        "results_root": str(loaded.results_root),
+        "server_host": loaded.config.server.host,
+        "server_port": str(loaded.config.server.port),
+        "vllm_commit": "commit",
+        "model_id": loaded.config.vllm.model.id,
+        "model_revision": loaded.config.vllm.model.revision,
+        "served_model_name": loaded.config.vllm.model.served_name,
+    }
+    for spec, allow_trial in ((plan.server, False), (plan.warmup, False), (plan.benchmark, True)):
+        if spec is None:
+            continue
+        try:
+            for value in [*spec.args, *spec.environment.values()]:
+                substitute(value, context, allow_trial=allow_trial)
+        except Exception as exc:
+            errors.append(str(exc))
+
+
+def _argument_value(arguments: list[str], flag: str) -> str | None:
+    prefix = f"{flag}="
+    for index, argument in enumerate(arguments):
+        if argument.startswith(prefix):
+            return argument[len(prefix) :]
+        if argument == flag and index + 1 < len(arguments):
+            return arguments[index + 1]
+    return None
+
+
+def _is_loopback(host: str) -> bool:
+    return host in {"127.0.0.1", "::1", "localhost"}
 
 
 def _check_results_root(results_root: Path, errors: list[str]) -> None:

@@ -8,6 +8,7 @@ import typer
 
 from .commands import build_plan, format_plan
 from .config import load_config
+from .doctor import format_doctor_report, run_doctor, write_doctor_report
 from .errors import ExperimentError
 from .experiment import ExperimentRunner
 from .preflight import validate_preflight
@@ -41,6 +42,21 @@ def plan(config: Path = typer.Argument(..., exists=True, readable=True)) -> None
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(format_plan(loaded, execution_plan, preflight))
+
+
+@app.command()
+def doctor(
+    config: Path = typer.Argument(..., exists=True, readable=True),
+    output: Path | None = typer.Option(None, "--output", help="Write a JSON diagnostic report."),
+) -> None:
+    """Execute lightweight diagnostics without starting the server or benchmark."""
+    loaded = _load_or_exit(config)
+    report = run_doctor(loaded)
+    if output is not None:
+        write_doctor_report(output, report)
+    typer.echo(format_doctor_report(report))
+    if not report["passed"]:
+        raise typer.Exit(code=1)
 
 
 @app.command()

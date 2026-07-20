@@ -112,4 +112,19 @@ def format_plan(
         )
     if preflight is not None:
         lines.extend(f"Preflight warning: {warning}" for warning in preflight.warnings)
+    vllm = loaded.config.vllm
+    if not vllm.enabled:
+        lines.append("vLLM integration: disabled")
+    else:
+        executable = preflight.vllm_executable if preflight is not None else None
+        lines.extend(
+            [
+                "vLLM integration: enabled",
+                f"vLLM repository: {vllm.repository_path}",
+                f"vLLM executable: {executable or vllm.executable}",
+                f"vLLM expected commit: {vllm.expected_commit}",
+                f"vLLM model: {vllm.model.id}@{vllm.model.revision}",
+                f"vLLM served model name: {vllm.model.served_name}",
+            ]
+        )
     return "\n".join(lines)

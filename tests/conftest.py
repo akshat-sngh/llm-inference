@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -27,6 +28,7 @@ def write_config(
     telemetry: dict[str, object] | None = None,
     server_health_status: int = 200,
     readiness_timeout: float = 3,
+    vllm: dict[str, object] | None = None,
 ) -> Path:
     fixture_directory = Path(__file__).parent / "fixtures"
     port = free_port()
@@ -72,6 +74,26 @@ def write_config(
         }
     if telemetry is not None:
         document["telemetry"] = {"nvidia": telemetry}
+    if vllm is not None:
+        document["vllm"] = vllm
     path = tmp_path / "experiment.yaml"
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
     return path
+
+
+def create_fake_vllm_repository(tmp_path: Path) -> tuple[Path, str]:
+    repository = tmp_path / "fake-vllm-repository"
+    repository.mkdir()
+    (repository / "marker.txt").write_text("fake vllm repository\n")
+    for arguments in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "tests@example.invalid"],
+        ["git", "config", "user.name", "Test User"],
+        ["git", "add", "marker.txt"],
+        ["git", "commit", "-qm", "fake vllm"],
+    ):
+        subprocess.run(arguments, cwd=repository, check=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repository, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    return repository, head
